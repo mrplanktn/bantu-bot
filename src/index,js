@@ -1,0 +1,63 @@
+import github from '@actions/github';
+import core from '@actions/core';
+import { analyzeContent } from './openai-client.js';
+
+async function run() {
+  try {
+    const token = process.env.GITHUB_TOKEN;
+    if (!token) throw new Error("GITHUB_TOKEN is missing.");
+
+    const octokit = github.getOctokit(token);
+    const { context } = github;
+    const { owner, repo } = context.repo;
+
+    // Handle Newly Opened Issues
+    if (context.eventName === 'issues') {
+      const issue = context.payload.issue;
+      console.log(`Analyzing issue #${issue.number}...`);
+
+      const content = `Title: ${issue.title}\n\nBody:\n${issue.body}`;
+      const aiResponseRaw = await analyzeContent(content, 'issue');
+      const aiData = JSON.parse(aiResponseRaw);
+
+      // Post the comment back to the issue
+      await octokit.rest.issues.createComment({
+        owner,
+        repo,
+        issue_number: issue.number,
+        body: `🤖 **AI Triage Assistant:**\n\n${aiData.reply}`
+      });
+
+      // Add suggested labels if they exist
+      if (aiData.labels && aiData.labels.length > 0) {
+        await octokit.rest.issues.addLabels({
+          owner,
+          repo,
+          issue_number: issue.number,
+          labels: aiData.labels
+        });
+      }
+    } 
+    
+    // Handle Newly Opened Pull Requests
+    else if (context.eventName === 'pull_request') {
+      const pr = context.payload.pull_request;
+      console.log(`Analyzing PR #${pr.number}...`);
+
+      const content = `Title: ${pr.title}\n\nDescription:\n${pr.body}`;
+      const prReview = await analyzeContent(content, 'pull_request');
+
+      await octokit.rest.issues.createComment({
+        owner,
+        repo,
+        issue_number: pr.number,
+        body: `🤖 **AI PR Review Assistant:**\n\n${prReview}`
+      });
+    }
+
+  } catch (error) {
+    core.setFailed(error.message);
+  }
+}
+
+run();
